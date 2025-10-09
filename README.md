@@ -3,7 +3,7 @@
 This repository contains code and a Jupyter notebook used to explore CDGS-style compositional samplers for multimodal 2D synthetic datasets. The materials demonstrate experiments on compositional samplers with resampling/pruning heuristics.
 
 Contents
-- `diffusion_flow_comparison.ipynb` — Main notebook that builds models, defines CDGS samplers, runs experiments, and produces visualizations.
+- `getting_started_with_CDGS.ipynb` — Main notebook that builds models, defines CDGS samplers, runs experiments, and produces visualizations.
 - `dataset.py` — Utilities to create synthetic 2D multimodal datasets and plotting helpers.
 - `plotter.py` — Standalone plotting utilities and helpers to visualize latents and Gaussian overlays.
 - `pretrained_checkpoints/` — Pretrained model weights (not tracked by git in default `.gitignore`).
