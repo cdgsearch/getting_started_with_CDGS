@@ -1,0 +1,127 @@
+{
+    "description": "Gaussian parameters for 1D distributions at each index position",
+    "parameters": {
+        "index_0": {
+            "type": "single_gaussian",
+            "mu": 0.0,
+            "sigma": 0.2,
+            "description": "First index: single Gaussian with mu=0, std=0.5"
+        },
+        "index_last": {
+            "type": "single_gaussian",
+            "mu": 0.0,
+            "sigma": 0.2,
+            "description": "Last index: single Gaussian with mu=0, std=0.25"
+        },
+        "index_middle": {
+            "type": "mixture_gaussian",
+            "components": [
+                {
+                    "mu": 0.75,
+                    "sigma": 0.1,
+                    "weight": 0.5
+                },
+                {
+                    "mu": -0.75,
+                    "sigma": 0.1,
+                    "weight": 0.5
+                }
+            ],
+            "description": "Middle indices: mixture of two Gaussians (mu=±0.75, sigma=0.25, equal weights)"
+        }
+    },
+    "rules": {
+        "index_assignment": {
+            "0": "index_0",
+            "-1": "index_last",
+            "others": "index_middle"
+        }
+    },
+    "transitions": {
+        "description": "Valid mode transitions between consecutive indices",
+        "from_start": {
+            "description": "From first index (single mode at 0) to first intermediate",
+            "source_modes": [
+                0.0
+            ],
+            "target_modes": [
+                0.75,
+                -0.75
+            ],
+            "transitions": [
+                {
+                    "from": 0.0,
+                    "to": 0.75
+                },
+                {
+                    "from": 0.0,
+                    "to": -0.75
+                }
+            ]
+        },
+        "intermediate": {
+            "description": "Between intermediate indices (mode persistence)",
+            "source_modes": [
+                0.75,
+                -0.75
+            ],
+            "target_modes": [
+                0.75,
+                -0.75
+            ],
+            "transitions": [
+                {
+                    "from": 0.75,
+                    "to": 0.75
+                },
+                {
+                    "from": -0.75,
+                    "to": -0.75
+                }
+            ]
+        },
+        "to_end": {
+            "description": "From last intermediate to final index (converge to 0)",
+            "source_modes": [
+                0.75,
+                -0.75
+            ],
+            "target_modes": [
+                0.0
+            ],
+            "transitions": [
+                {
+                    "from": 0.75,
+                    "to": 0.0
+                },
+                {
+                    "from": -0.75,
+                    "to": 0.0
+                }
+            ]
+        }
+    },
+    "plotting_settings": {
+        "x_range": [
+            -3,
+            3
+        ],
+        "num_points": 1000,
+        "pdf_scale_factor": 0.3,
+        "colors": {
+            "index_0": "#3399cc",
+            "index_last": "#3399cc",
+            "index_middle": "#3399cc"
+        },
+        "alpha": 0.8,
+        "linewidth": 2,
+        "transition_arrows": {
+            "color": "black",
+            "alpha": 1,
+            "width": 0.03,
+            "head_width": 1,
+            "head_length": 1,
+            "offset_x": 0.05
+        }
+    }
+}
