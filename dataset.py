@@ -1,241 +1,195 @@
-"""Utilities for creating and visualizing simple multimodal datasets.
-
-This module provides a small Dataset implementation that produces 2D
-multimodal synthetic data with configurable mode counts, spacings,
-and transition constraints. It also includes helper functions to
-create common transition matrices and simple plotting utilities used
-in the accompanying notebook.
-
-Notes:
-- The generated dataset is deterministic when a `seed` is provided.
-- The transition matrix controls which (x1, x2) mode pairs are
-    allowed; invalid pairs will not be sampled.
-"""
-
+from typing import List, Optional, Tuple, Union, Any
 import torch
 from torch.utils.data import Dataset
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
-class MultiModal2DDataset(Dataset):
-    """A lightweight 2D multimodal synthetic dataset.
+class MultiModalDataset(Dataset):
+    """A lightweight multimodal synthetic dataset.
 
-    The dataset generates `num_samples` points in R^2 by sampling from
-    independent mixture components along each axis (x1 and x2). A
-    `transition_matrix` can be provided to restrict which combinations
-    of (x1 mode, x2 mode) are valid; only valid pairs will be sampled.
+    Args:
+        num_samples: Number of samples to generate
+        start_means: Means of the start modes
+        start_stds: Standard deviations of the start modes
+        end_means: Means of the end modes
+        end_stds: Standard deviations of the end modes
+        transition_matrix: Transition matrix to restrict which combinations of modes are valid
+        seed: Random seed
     """
 
-    def __init__(self, num_samples, num_modes_x1=1, num_modes_x2=1,
-                 mode_spacing_x1=2.0, mode_spacing_x2=2.0,
-                 mode_std_x1=0.1, mode_std_x2=0.1,
-                 mode_probs_x1=None, mode_probs_x2=None,
-                 transition_matrix=None, seed=None):
-        """Initialize dataset and pre-sample points.
+    def __init__(self, num_samples: int, 
+                start_means: List[float],
+                start_stds: List[float],
+                end_means: List[float],
+                end_stds: List[float],
+                transition_matrix: Optional[np.ndarray] = None,
+                seed: Optional[int] = None) -> None:
 
-        See module-level docs for detailed parameter descriptions. This
-        method pre-samples `num_samples` points according to the
-        provided transition_matrix and mode probabilities.
-        """
-        self.num_samples = num_samples
-        self.num_modes_x1 = num_modes_x1
-        self.num_modes_x2 = num_modes_x2
-        self.mode_spacing_x1 = mode_spacing_x1
-        self.mode_spacing_x2 = mode_spacing_x2
-        self.mode_std_x1 = mode_std_x1
-        self.mode_std_x2 = mode_std_x2
-        self.seed = seed
-        self.rng = np.random.default_rng(seed)
+        # Validate parameters
+        self._validate_parameters(start_means, start_stds, end_means, end_stds)
+        
+        # Store basic parameters
+        self.start_means: List[float] = start_means
+        self.start_stds: List[float] = start_stds
+        self.end_means: List[float] = end_means
+        self.end_stds: List[float] = end_stds
+        self.num_modes_x1: int = len(start_means)
+        self.num_modes_x2: int = len(end_means)
+        self.num_samples: int = num_samples
+        self.rng: np.random.Generator = np.random.default_rng(seed)
 
-        # Transition matrix for valid mode combinations
+        # Setup transition matrix and probabilities
+        self.transition_matrix = self._setup_transition_matrix(transition_matrix)
+        self.transition_probabilities = self._setup_transition_probabilities()
+        
+        # Initialize data arrays
+        self.data: np.ndarray
+        self.start_labels: np.ndarray
+        self.end_labels: np.ndarray
+        
+        self._generate_data(num_samples)
+
+    def _validate_parameters(self, start_means: List[float], start_stds: List[float], 
+                           end_means: List[float], end_stds: List[float]) -> None:
+        """Validate that parameter lists have consistent lengths."""
+        if len(start_means) != len(start_stds):
+            raise ValueError("start_means and start_stds must have the same length")
+        if len(end_means) != len(end_stds):
+            raise ValueError("end_means and end_stds must have the same length")
+
+    def _setup_transition_matrix(self, transition_matrix: Optional[np.ndarray]) -> np.ndarray:
+        """Setup and validate the transition matrix."""
         if transition_matrix is None:
-            # Default: all combinations are valid
-            self.transition_matrix = np.ones((num_modes_x1, num_modes_x2), dtype=bool)
+            matrix = np.ones((self.num_modes_x1, self.num_modes_x2), dtype=bool)
         else:
-            self.transition_matrix = np.array(transition_matrix, dtype=bool)
-            if self.transition_matrix.shape != (num_modes_x1, num_modes_x2):
-                raise ValueError(
-                    f"Transition matrix shape {self.transition_matrix.shape} "
-                    f"doesn't match expected shape ({num_modes_x1}, {num_modes_x2})"
-                )
+            matrix = transition_matrix
+            
+        # Validate transition matrix
+        expected_shape = (self.num_modes_x1, self.num_modes_x2)
+        if matrix.shape != expected_shape:
+            raise ValueError(f"Transition matrix shape {matrix.shape} doesn't match expected shape {expected_shape}")
+        if matrix.dtype != bool:
+            raise ValueError("Transition matrix must be a boolean array")
+            
+        return matrix
 
-        # Get valid mode combinations
-        valid_combinations = np.where(self.transition_matrix)
-        self.valid_mode_pairs = list(zip(valid_combinations[0], valid_combinations[1]))
+    def _setup_transition_probabilities(self) -> np.ndarray:
+        """Setup transition probabilities from the transition matrix.
+        
+        NOTE: Assumes all starting modes are equally likely, and all transitions 
+        from a starting mode are equally likely.
+        """
+        # Create transition probabilities: equal probability for each start mode, 
+        # then equal probability for valid transitions
+        probabilities = self.transition_matrix.astype(float) / np.sum(
+            self.transition_matrix, axis=1, keepdims=True
+        )
+        # Weight by equal probability for each start mode
+        return probabilities / self.num_modes_x1
 
-        if len(self.valid_mode_pairs) == 0:
-            raise ValueError("No valid mode combinations specified in transition matrix")
+    def _generate_data(self, num_samples: int) -> None:
+        flat_indices = self.rng.choice(
+            np.arange(self.transition_probabilities.size), 
+            size=num_samples, 
+            p=self.transition_probabilities.ravel()
+        )
+        
+        unraveled_indices = np.unravel_index(flat_indices, self.transition_matrix.shape)
+        self.start_labels, self.end_labels = unraveled_indices
 
-        # Create probabilities for valid combinations
-        self.combination_probs = []
-        for mode_x1, mode_x2 in self.valid_mode_pairs:
-            prob_x1 = self.mode_probs_x1[mode_x1] if mode_probs_x1 is not None else 1.0 / num_modes_x1
-            prob_x2 = self.mode_probs_x2[mode_x2] if mode_probs_x2 is not None else 1.0 / num_modes_x2
-            self.combination_probs.append(prob_x1 * prob_x2)
+        x1 = np.array(self.start_means)[self.start_labels] + self.rng.normal(loc=0, scale=np.array(self.start_stds)[self.start_labels])
+        x2 = np.array(self.end_means)[self.end_labels] + self.rng.normal(loc=0, scale=np.array(self.end_stds)[self.end_labels])
 
-        # Normalize combination probabilities
-        self.combination_probs = np.array(self.combination_probs)
-        self.combination_probs = self.combination_probs / self.combination_probs.sum()
+        self.data = np.column_stack([x1, x2])
 
-        # Mode centers for x1 and x2
-        self.centers_x1 = np.linspace(-((num_modes_x1 - 1) / 2) * mode_spacing_x1,
-                                     ((num_modes_x1 - 1) / 2) * mode_spacing_x1,
-                                     num_modes_x1)
-        self.centers_x2 = np.linspace(-((num_modes_x2 - 1) / 2) * mode_spacing_x2,
-                                     ((num_modes_x2 - 1) / 2) * mode_spacing_x2,
-                                     num_modes_x2)
-
-        # Probabilities for each mode in x1
-        if mode_probs_x1 is None:
-            self.mode_probs_x1 = np.ones(num_modes_x1) / num_modes_x1
-        else:
-            self.mode_probs_x1 = np.array(mode_probs_x1)
-            self.mode_probs_x1 = self.mode_probs_x1 / self.mode_probs_x1.sum()
-
-        # Probabilities for each mode in x2
-        if mode_probs_x2 is None:
-            self.mode_probs_x2 = np.ones(num_modes_x2) / num_modes_x2
-        else:
-            self.mode_probs_x2 = np.array(mode_probs_x2)
-            self.mode_probs_x2 = self.mode_probs_x2 / self.mode_probs_x2.sum()
-
-        # Pre-sample all points
-        self.data = []
-        self.labels_x1 = []
-        self.labels_x2 = []
-
-        for _ in range(num_samples):
-            # Sample a valid mode combination
-            combo_idx = self.rng.choice(len(self.valid_mode_pairs), p=self.combination_probs)
-            mode_idx_x1, mode_idx_x2 = self.valid_mode_pairs[combo_idx]
-
-            # Sample x1 and x2 from selected modes
-            x1 = self.rng.normal(loc=self.centers_x1[mode_idx_x1], scale=mode_std_x1)
-            x2 = self.rng.normal(loc=self.centers_x2[mode_idx_x2], scale=mode_std_x2)
-
-            self.data.append([x1, x2])
-            self.labels_x1.append(mode_idx_x1)
-            self.labels_x2.append(mode_idx_x2)
-
-        self.data = np.array(self.data, dtype=np.float32)
-        self.labels_x1 = np.array(self.labels_x1, dtype=np.int64)
-        self.labels_x2 = np.array(self.labels_x2, dtype=np.int64)
-
-    def __len__(self):
+    def __len__(self) -> int:
         return self.num_samples
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> torch.Tensor:
         # Returns data as `(x1, x2)` points with labels `(mode_idx_x1, mode_idx_x2)`
-        return torch.tensor(self.data[idx])
+        return torch.tensor(self.data[idx], dtype=torch.float32)
 
-    def plot_transition_matrix(self, figsize=(8, 6), title=None):
-        """Visualize the transition matrix showing valid mode combinations."""
-        plt.figure(figsize=figsize)
+    def plot_data(self, figsize: Tuple[int, int] = (10, 8), alpha: float = 0.6, s: int = 20) -> plt.Figure:
+        """Plot the 2D dataset with different colors for different mode combinations.
+        
+        Returns:
+            matplotlib.pyplot.Figure: The figure object that can be further modified
+        """
+        fig = plt.figure(figsize=figsize)
+        
+        transition_pairs = np.where(self.transition_matrix)
+        colors = cm.get_cmap('tab20')(np.linspace(0, 1, len(transition_pairs[0])))
 
-        # Create heatmap of transition matrix
-        plt.imshow(self.transition_matrix.T, cmap='RdYlBu_r', aspect='auto', origin='lower')
-        plt.colorbar(label='Valid Transition (1=Yes, 0=No)')
-
-        # Labels and ticks
-        plt.xlabel('X1 Mode Index')
-        plt.ylabel('X2 Mode Index')
-        plt.title(title or 'Valid Mode Transitions Matrix')
-
-        x1_labels = [f'{i}\n({self.centers_x1[i]:.1f})' for i in range(self.num_modes_x1)]
-        x2_labels = [f'{i}\n({self.centers_x2[i]:.1f})' for i in range(self.num_modes_x2)]
-        plt.xticks(range(self.num_modes_x1), x1_labels)
-        plt.yticks(range(self.num_modes_x2), x2_labels)
-
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig("transition_matrix.png")
-
-    def get_valid_combinations_info(self):
-        """Return information about valid mode combinations and observed coverage."""
-        unique_combinations = set(zip(self.labels_x1, self.labels_x2))
-
-        info = {
-            'total_valid_combinations': len(self.valid_mode_pairs),
-            'total_possible_combinations': self.num_modes_x1 * self.num_modes_x2,
-            'valid_mode_pairs': self.valid_mode_pairs,
-            'combination_probabilities': dict(zip(self.valid_mode_pairs, self.combination_probs)),
-            'observed_combinations': list(unique_combinations),
-            'transition_matrix_shape': self.transition_matrix.shape,
-            'coverage_ratio': len(self.valid_mode_pairs) / (self.num_modes_x1 * self.num_modes_x2),
-        }
-
-        return info
-
-    def plot_data(self, figsize=(10, 8), alpha=0.6, s=20, title=None):
-        """Plot the 2D dataset with different colors for different mode combinations."""
-        plt.figure(figsize=figsize)
-
-        unique_combinations = set(zip(self.labels_x1, self.labels_x2))
-        n_combinations = len(unique_combinations)
-        colors = cm.get_cmap('tab20')(np.linspace(0, 1, n_combinations))
-
-        for i, (mode_x1, mode_x2) in enumerate(unique_combinations):
-            mask = (self.labels_x1 == mode_x1) & (self.labels_x2 == mode_x2)
+        for i, (mode_x1, mode_x2) in enumerate(zip(transition_pairs[0], transition_pairs[1])):
+            mask = (self.start_labels == mode_x1) & (self.end_labels == mode_x2)
             data_x1 = self.data[mask][:, 0]
             data_x2 = self.data[mask][:, 1]
             plt.scatter(data_x1, data_x2, c=[colors[i]], alpha=alpha, s=s,
                         label=f'Mode ({mode_x1}, {mode_x2})')
 
-        plt.xlabel('X1')
-        plt.ylabel('X2')
-        plt.title(title or f'2D Multimodal Dataset ({self.num_modes_x1}×{self.num_modes_x2} modes)')
+        plt.xlabel('Start')
+        plt.ylabel('End')
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig("2D_multimodal_dataset.png")
+        
+        return fig
 
-    def plot_marginals(self, figsize=(12, 4), bins=50, alpha=0.7, title=None):
-        """Plot marginal distributions of X1 and X2."""
+    def plot_marginals(self, figsize: Tuple[int, int] = (12, 4), bins: int = 50, alpha: float = 0.7, title: Optional[str] = None) -> plt.Figure:
+        """Plot marginal distributions of X1 and X2.
+        
+        Returns:
+            matplotlib.pyplot.Figure: The figure object that can be further modified
+        """
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
 
         # X1 marginal
-        data_x1 = self.data[:, 0]  # type: ignore
+        data_x1 = self.data[:, 0]
         ax1.hist(data_x1, bins=bins, alpha=alpha, density=True, color='blue', edgecolor='black')
-        for center in self.centers_x1:
-            ax1.axvline(center, color='red', linestyle='--', alpha=0.7)
-        ax1.axvline(self.centers_x1[0], color='red', linestyle='--', alpha=0.7, label='Mode centers')
-        ax1.set_xlabel('X1')
+        for i, center in enumerate(self.start_means):
+            ax1.axvline(center, color='red', linestyle='--', alpha=0.7, 
+                       label='Mode centers' if i == 0 else "")
+        ax1.set_xlabel('Start Values')
         ax1.set_ylabel('Density')
-        ax1.set_title(f'X1 Marginal ({self.num_modes_x1} modes)')
+        ax1.set_title(f'Start Marginal ({self.num_modes_x1} modes)')
         ax1.grid(True, alpha=0.3)
         ax1.legend()
 
         # X2 marginal
-        data_x2 = self.data[:, 1]  # type: ignore
+        data_x2 = self.data[:, 1]
         ax2.hist(data_x2, bins=bins, alpha=alpha, density=True, color='green', edgecolor='black')
-        for center in self.centers_x2:
-            ax2.axvline(center, color='red', linestyle='--', alpha=0.7)
-        ax2.axvline(self.centers_x2[0], color='red', linestyle='--', alpha=0.7, label='Mode centers')
-        ax2.set_xlabel('X2')
+        for i, center in enumerate(self.end_means):
+            ax2.axvline(center, color='red', linestyle='--', alpha=0.7,
+                       label='Mode centers' if i == 0 else "")
+        ax2.set_xlabel('End Values')
         ax2.set_ylabel('Density')
-        ax2.set_title(f'X2 Marginal ({self.num_modes_x2} modes)')
+        ax2.set_title(f'End Marginal ({self.num_modes_x2} modes)')
         ax2.grid(True, alpha=0.3)
         ax2.legend()
 
         if title:
             fig.suptitle(title)
         plt.tight_layout()
-        plt.savefig("2D_marginals.png")
+        
+        return fig
 
 
-def plot_1d_dataset(dataset, figsize=(10, 6), bins=50, alpha=0.7, title=None):
+def plot_1d_dataset(dataset: Any, figsize: Tuple[int, int] = (10, 6), bins: int = 50, alpha: float = 0.7, title: Optional[str] = None) -> plt.Figure:
     """
     Plot utility for 1D multimodal dataset.
     
     Args:
-        dataset (MultiModal1DDataset): The 1D dataset to plot.
-        figsize (tuple): Figure size (width, height).
-        bins (int): Number of histogram bins.
-        alpha (float): Histogram transparency.
-        title (str): Plot title.
+        dataset: The 1D dataset to plot.
+        figsize: Figure size (width, height).
+        bins: Number of histogram bins.
+        alpha: Histogram transparency.
+        title: Plot title.
+        
+    Returns:
+        matplotlib.pyplot.Figure: The figure object that can be further modified
     """
-    plt.figure(figsize=figsize)
+    fig = plt.figure(figsize=figsize)
     
     # Plot histogram
     plt.hist(dataset.data, bins=bins, alpha=alpha, density=True, 
@@ -252,70 +206,8 @@ def plot_1d_dataset(dataset, figsize=(10, 6), bins=50, alpha=0.7, title=None):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.show()
-
-
-def create_diagonal_transition_matrix(num_modes_x1, num_modes_x2):
-    """
-    Create a diagonal transition matrix (only allows matching mode indices).
     
-    Args:
-        num_modes_x1 (int): Number of modes in x1 dimension.
-        num_modes_x2 (int): Number of modes in x2 dimension.
-        
-    Returns:
-        np.array: Diagonal transition matrix.
-    """
-    matrix = np.zeros((num_modes_x1, num_modes_x2), dtype=bool)
-    min_modes = min(num_modes_x1, num_modes_x2)
-    for i in range(min_modes):
-        matrix[i, i] = True
-    return matrix
-
-
-def create_block_diagonal_transition_matrix(num_modes_x1, num_modes_x2, block_size=2):
-    """
-    Create a block diagonal transition matrix.
-    
-    Args:
-        num_modes_x1 (int): Number of modes in x1 dimension.
-        num_modes_x2 (int): Number of modes in x2 dimension.
-        block_size (int): Size of each diagonal block.
-        
-    Returns:
-        np.array: Block diagonal transition matrix.
-    """
-    matrix = np.zeros((num_modes_x1, num_modes_x2), dtype=bool)
-    
-    for i in range(0, min(num_modes_x1, num_modes_x2), block_size):
-        end_i = min(i + block_size, num_modes_x1)
-        end_j = min(i + block_size, num_modes_x2)
-        matrix[i:end_i, i:end_j] = True
-    
-    return matrix
-
-
-def create_sparse_random_transition_matrix(num_modes_x1, num_modes_x2, sparsity=0.3, seed=None):
-    """
-    Create a sparse random transition matrix.
-    
-    Args:
-        num_modes_x1 (int): Number of modes in x1 dimension.
-        num_modes_x2 (int): Number of modes in x2 dimension.
-        sparsity (float): Fraction of entries that should be True (0.0 to 1.0).
-        seed (int or None): Random seed.
-        
-    Returns:
-        np.array: Sparse random transition matrix.
-    """
-    rng = np.random.default_rng(seed)
-    matrix = rng.random((num_modes_x1, num_modes_x2)) < sparsity
-    
-    # Ensure at least one valid combination exists
-    if not matrix.any():
-        matrix[0, 0] = True
-    
-    return matrix
+    return fig
 
 
 if __name__ == "__main__":
@@ -325,21 +217,19 @@ if __name__ == "__main__":
         [0, 1],
     ], dtype=bool)
     
-    dataset_custom = MultiModal2DDataset(
+    dataset_custom = MultiModalDataset(
         num_samples=5000,
-        num_modes_x1=2,
-        num_modes_x2=2,
-        mode_spacing_x1=2.0,
-        mode_spacing_x2=1.5,
-        mode_std_x1=0.2,
-        mode_std_x2=0.1,
+        start_means=[0, 2],
+        start_stds=[0.2, 0.2],
+        end_means=[0, 1],
+        end_stds=[0.2, 0.2],
         transition_matrix=transition_matrix
     )
-    print("Custom transition matrix:")
-    print(transition_matrix.astype(int))
-    print("Valid combinations:", dataset_custom.get_valid_combinations_info()['valid_mode_pairs'])
     
-    # Plot the custom dataset
-    dataset_custom.plot_data(title="Custom Transition Matrix Dataset")
-    dataset_custom.plot_transition_matrix()
-    dataset_custom.plot_marginals(title="Custom Transitions - Marginal Distributions")
+    data_figure = dataset_custom.plot_data()
+    data_figure.suptitle("Custom Transition Matrix Dataset")
+    data_figure.savefig("figures_notebook/custom_transition_matrix_dataset.png", dpi=300, bbox_inches="tight")
+
+    marginals_figure = dataset_custom.plot_marginals()
+    marginals_figure.suptitle("Custom Transitions - Marginal Distributions")
+    marginals_figure.savefig("figures_notebook/custom_transition_matrix_marginals.png", dpi=300, bbox_inches="tight")
