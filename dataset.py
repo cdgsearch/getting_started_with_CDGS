@@ -4,6 +4,7 @@ from torch.utils.data import Dataset
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+from scipy.stats import norm
 
 class MultiModalDataset(Dataset):
     """A lightweight multimodal synthetic dataset.
@@ -110,31 +111,85 @@ class MultiModalDataset(Dataset):
         # Returns data as `(x1, x2)` points with labels `(mode_idx_x1, mode_idx_x2)`
         return torch.tensor(self.data[idx], dtype=torch.float32)
 
-    def plot_data(self, figsize: Tuple[int, int] = (10, 8), alpha: float = 0.6, s: int = 20) -> plt.Figure:
-        """Plot the 2D dataset with different colors for different mode combinations.
+    def plot_data(self, figsize: Tuple[int, int] = (12, 8), alpha: float = 0.6, s: int = 20, 
+                  pdf_scale: float = 0.3, num_points: int = 200) -> plt.Figure:
+        """Plot the dataset with Start/End on x-axis and values on y-axis, showing Gaussian distributions.
         
+        Args:
+            figsize: Figure size (width, height)
+            alpha: Transparency for scatter points
+            s: Size of scatter points
+            pdf_scale: Scaling factor for PDF curves
+            num_points: Number of points for PDF curves
+            
         Returns:
             matplotlib.pyplot.Figure: The figure object that can be further modified
         """
-        fig = plt.figure(figsize=figsize)
+        fig, ax = plt.subplots(figsize=figsize)
         
+        # Get data range for PDF plotting
+        y_min, y_max = self.data.min() - 0.5, self.data.max() + 0.5
+        y_points = np.linspace(y_min, y_max, num_points)
+        
+        # Plot theoretical Gaussian distributions
+        self._plot_gaussian_distributions(ax, y_points, pdf_scale)
+        
+        # Plot data points with colors for different mode combinations
+        self._plot_data_points(ax, alpha, s)
+        
+        # Format plot
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(['Start', 'End'], fontsize=14)
+        ax.set_ylabel('Value', fontsize=14)
+        ax.grid(True, alpha=0.3)
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        plt.tight_layout()
+        return fig
+    
+    def _plot_gaussian_distributions(self, ax: plt.Axes, y_points: np.ndarray, pdf_scale: float) -> None:
+        """Plot theoretical Gaussian distributions as vertical curves."""
+        # Plot start distributions
+        for i, (mean, std) in enumerate(zip(self.start_means, self.start_stds)):
+            pdf = norm.pdf(y_points, mean, std)
+            pdf_scaled = pdf * pdf_scale
+            ax.fill_betweenx(y_points, 0, pdf_scaled, alpha=0.3, 
+                           color=f'C{i}', label=f'Start Mode {i}')
+            ax.plot(pdf_scaled, y_points, color=f'C{i}', linewidth=2)
+        
+        # Plot end distributions  
+        for i, (mean, std) in enumerate(zip(self.end_means, self.end_stds)):
+            pdf = norm.pdf(y_points, mean, std)
+            pdf_scaled = 1 + pdf * pdf_scale  # Offset to x=1 position
+            ax.fill_betweenx(y_points, 1, pdf_scaled, alpha=0.3,
+                           color=f'C{i + len(self.start_means)}', label=f'End Mode {i}')
+            ax.plot(pdf_scaled, y_points, color=f'C{i + len(self.start_means)}', linewidth=2)
+    
+    def _plot_data_points(self, ax: plt.Axes, alpha: float, s: int) -> None:
+        """Plot actual data points with connection lines."""
+        # Get valid transition pairs and colors
         transition_pairs = np.where(self.transition_matrix)
         colors = cm.get_cmap('tab20')(np.linspace(0, 1, len(transition_pairs[0])))
-
+        
+        # Plot data points and connections for each valid mode combination
         for i, (mode_x1, mode_x2) in enumerate(zip(transition_pairs[0], transition_pairs[1])):
             mask = (self.start_labels == mode_x1) & (self.end_labels == mode_x2)
-            data_x1 = self.data[mask][:, 0]
-            data_x2 = self.data[mask][:, 1]
-            plt.scatter(data_x1, data_x2, c=[colors[i]], alpha=alpha, s=s,
-                        label=f'Mode ({mode_x1}, {mode_x2})')
-
-        plt.xlabel('Start')
-        plt.ylabel('End')
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        
-        return fig
+            if not np.any(mask):
+                continue
+                
+            start_values = self.data[mask][:, 0]
+            end_values = self.data[mask][:, 1]
+            
+            # Plot scatter points
+            ax.scatter([0] * len(start_values), start_values, c=[colors[i]], 
+                      alpha=alpha, s=s, label=f'Transition ({mode_x1}→{mode_x2})')
+            ax.scatter([1] * len(end_values), end_values, c=[colors[i]], 
+                      alpha=alpha, s=s)
+            
+            # Plot connection lines
+            for start_val, end_val in zip(start_values, end_values):
+                ax.plot([0, 1], [start_val, end_val], color=colors[i], 
+                       alpha=alpha*0.5, linewidth=0.8)
 
     def plot_marginals(self, figsize: Tuple[int, int] = (12, 4), bins: int = 50, alpha: float = 0.7, title: Optional[str] = None) -> plt.Figure:
         """Plot marginal distributions of X1 and X2.
