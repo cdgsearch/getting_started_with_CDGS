@@ -111,169 +111,119 @@ class MultiModalDataset(Dataset):
         # Returns data as `(x1, x2)` points with labels `(mode_idx_x1, mode_idx_x2)`
         return torch.tensor(self.data[idx], dtype=torch.float32)
 
-    def plot_data(self, figsize: Tuple[int, int] = (12, 8), alpha: float = 0.6, s: int = 20, 
-                  pdf_scale: float = 0.3, num_points: int = 200) -> plt.Figure:
-        """Plot the dataset with Start/End on x-axis and values on y-axis, showing Gaussian distributions.
+    def plot_transitions(self, samples: Optional[np.ndarray] = None, title: Optional[str] = None, annotate_valid: bool = False, 
+                        num_stds: float = 3.0, n: int = 25) -> plt.Figure:
+        """Plot the dataset transitions with Start/End on x-axis and values on y-axis.
         
         Args:
-            figsize: Figure size (width, height)
-            alpha: Transparency for scatter points
-            s: Size of scatter points
-            pdf_scale: Scaling factor for PDF curves
-            num_points: Number of points for PDF curves
-            
-        Returns:
-            matplotlib.pyplot.Figure: The figure object that can be further modified
+            title: Optional plot title
+            annotate_valid: Whether to color-code transitions as green (valid) or red (invalid)
+            num_stds: Number of standard deviations to consider as "in-distribution"
+            n: Number of samples to plot (default: 25)
         """
-        fig, ax = plt.subplots(figsize=figsize)
+        fig, ax = plt.subplots(figsize=(12, 8))
         
-        # Get data range for PDF plotting
-        y_min, y_max = self.data.min() - 0.5, self.data.max() + 0.5
-        y_points = np.linspace(y_min, y_max, num_points)
+        # Plot Gaussian distributions
+        y_range = (self.data.min() - 0.5, self.data.max() + 0.5)
+        y_points = np.linspace(y_range[0], y_range[1], 200)
         
-        # Plot theoretical Gaussian distributions
-        self._plot_gaussian_distributions(ax, y_points, pdf_scale)
-        
-        # Plot data points with colors for different mode combinations
-        self._plot_data_points(ax, alpha, s)
-        
-        # Format plot
-        ax.set_xticks([0, 1])
-        ax.set_xticklabels(['Start', 'End'], fontsize=14)
-        ax.set_ylabel('Value', fontsize=14)
-        ax.grid(True, alpha=0.3)
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        
-        plt.tight_layout()
-        return fig
-    
-    def _plot_gaussian_distributions(self, ax: plt.Axes, y_points: np.ndarray, pdf_scale: float) -> None:
-        """Plot theoretical Gaussian distributions as vertical curves."""
-        # Plot start distributions
+        # Start distributions
         for i, (mean, std) in enumerate(zip(self.start_means, self.start_stds)):
-            pdf = norm.pdf(y_points, mean, std)
-            pdf_scaled = pdf * pdf_scale
-            ax.fill_betweenx(y_points, 0, pdf_scaled, alpha=0.3, 
-                           color=f'C{i}', label=f'Start Mode {i}')
-            ax.plot(pdf_scaled, y_points, color=f'C{i}', linewidth=2)
+            pdf = norm.pdf(y_points, mean, std) * 0.3
+            ax.fill_betweenx(y_points, 0, pdf, alpha=0.3, color=f'C{i}', label=f'Start Mode {i}')
         
-        # Plot end distributions  
+        # End distributions  
         for i, (mean, std) in enumerate(zip(self.end_means, self.end_stds)):
-            pdf = norm.pdf(y_points, mean, std)
-            pdf_scaled = 1 + pdf * pdf_scale  # Offset to x=1 position
-            ax.fill_betweenx(y_points, 1, pdf_scaled, alpha=0.3,
+            pdf = norm.pdf(y_points, mean, std) * 0.3
+            ax.fill_betweenx(y_points, 1, 1 + pdf, alpha=0.3, 
                            color=f'C{i + len(self.start_means)}', label=f'End Mode {i}')
-            ax.plot(pdf_scaled, y_points, color=f'C{i + len(self.start_means)}', linewidth=2)
-    
-    def _plot_data_points(self, ax: plt.Axes, alpha: float, s: int) -> None:
-        """Plot actual data points with connection lines."""
-        # Get valid transition pairs and colors
-        transition_pairs = np.where(self.transition_matrix)
-        colors = cm.get_cmap('tab20')(np.linspace(0, 1, len(transition_pairs[0])))
         
-        # Plot data points and connections for each valid mode combination
-        for i, (mode_x1, mode_x2) in enumerate(zip(transition_pairs[0], transition_pairs[1])):
+        # Plot data points and connections
+        colors = cm.get_cmap('tab20')(np.linspace(0, 1, len(np.where(self.transition_matrix)[0])))
+        
+        samples = self.data if samples is None else samples
+        for i, (mode_x1, mode_x2) in enumerate(zip(*np.where(self.transition_matrix))):
             mask = (self.start_labels == mode_x1) & (self.end_labels == mode_x2)
             if not np.any(mask):
                 continue
                 
-            start_values = self.data[mask][:, 0]
-            end_values = self.data[mask][:, 1]
+            # Limit to first n samples for this transition
+            indices = np.where(mask)[0][:n]
+            start_vals, end_vals = self.data[indices][:, 0], self.data[indices][:, 1]
             
-            # Plot scatter points
-            ax.scatter([0] * len(start_values), start_values, c=[colors[i]], 
-                      alpha=alpha, s=s, label=f'Transition ({mode_x1}→{mode_x2})')
-            ax.scatter([1] * len(end_values), end_values, c=[colors[i]], 
-                      alpha=alpha, s=s)
+            # Scatter points
+            ax.scatter([0] * len(start_vals), start_vals, c=[colors[i]], alpha=0.6, s=20,
+                      label=f'Transition ({mode_x1}→{mode_x2})')
+            ax.scatter([1] * len(end_vals), end_vals, c=[colors[i]], alpha=0.6, s=20)
             
-            # Plot connection lines
-            for start_val, end_val in zip(start_values, end_values):
-                ax.plot([0, 1], [start_val, end_val], color=colors[i], 
-                       alpha=alpha*0.5, linewidth=0.8)
-
-    def plot_marginals(self, figsize: Tuple[int, int] = (12, 4), bins: int = 50, alpha: float = 0.7, title: Optional[str] = None) -> plt.Figure:
-        """Plot marginal distributions of X1 and X2.
+            # Connection lines
+            for start_val, end_val in zip(start_vals, end_vals):
+                if annotate_valid:
+                    is_valid = self._is_valid(start_val, end_val, mode_x1, mode_x2, num_stds)
+                    color = 'green' if is_valid else 'red'
+                    ax.plot([0, 1], [start_val, end_val], color=color, alpha=0.8, linewidth=1.2)
+                else:
+                    ax.plot([0, 1], [start_val, end_val], color=colors[i], alpha=0.3, linewidth=0.8)
         
-        Returns:
-            matplotlib.pyplot.Figure: The figure object that can be further modified
-        """
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
-
-        # X1 marginal
-        data_x1 = self.data[:, 0]
-        ax1.hist(data_x1, bins=bins, alpha=alpha, density=True, color='blue', edgecolor='black')
-        for i, center in enumerate(self.start_means):
-            ax1.axvline(center, color='red', linestyle='--', alpha=0.7, 
-                       label='Mode centers' if i == 0 else "")
-        ax1.set_xlabel('Start Values')
-        ax1.set_ylabel('Density')
-        ax1.set_title(f'Start Marginal ({self.num_modes_x1} modes)')
-        ax1.grid(True, alpha=0.3)
-        ax1.legend()
-
-        # X2 marginal
-        data_x2 = self.data[:, 1]
-        ax2.hist(data_x2, bins=bins, alpha=alpha, density=True, color='green', edgecolor='black')
-        for i, center in enumerate(self.end_means):
-            ax2.axvline(center, color='red', linestyle='--', alpha=0.7,
-                       label='Mode centers' if i == 0 else "")
-        ax2.set_xlabel('End Values')
-        ax2.set_ylabel('Density')
-        ax2.set_title(f'End Marginal ({self.num_modes_x2} modes)')
-        ax2.grid(True, alpha=0.3)
-        ax2.legend()
-
+        # Format
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels(['Start', 'End'], fontsize=14)
+        ax.set_ylabel('Value', fontsize=14)
+        ax.grid(True, alpha=0.3)
         if title:
-            fig.suptitle(title)
+            ax.set_title(title, fontsize=16)
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout()
-        
         return fig
-
-
-def plot_1d_dataset(dataset: Any, figsize: Tuple[int, int] = (10, 6), bins: int = 50, alpha: float = 0.7, title: Optional[str] = None) -> plt.Figure:
-    """
-    Plot utility for 1D multimodal dataset.
     
-    Args:
-        dataset: The 1D dataset to plot.
-        figsize: Figure size (width, height).
-        bins: Number of histogram bins.
-        alpha: Histogram transparency.
-        title: Plot title.
+    def _is_valid(self, start_val: float, end_val: float, start_mode: int, end_mode: int, num_stds: float) -> bool:
+        """Check if a transition is within expected distributions."""
+        start_valid = abs(start_val - self.start_means[start_mode]) <= num_stds * self.start_stds[start_mode]
+        end_valid = abs(end_val - self.end_means[end_mode]) <= num_stds * self.end_stds[end_mode]
+        return start_valid and end_valid
+    
+    def compute_accuracy(self, samples: np.ndarray, num_stds: float = 3.0) -> float:
+        """Compute accuracy of samples against theoretical distributions.
         
-    Returns:
-        matplotlib.pyplot.Figure: The figure object that can be further modified
-    """
-    fig = plt.figure(figsize=figsize)
-    
-    # Plot histogram
-    plt.hist(dataset.data, bins=bins, alpha=alpha, density=True, 
-             color='blue', edgecolor='black')
-    
-    # Mark mode centers
-    for i, center in enumerate(dataset.centers):
-        plt.axvline(center, color='red', linestyle='--', alpha=0.7, 
-                   label='Mode centers' if i == 0 else "")
-    
-    plt.xlabel('X')
-    plt.ylabel('Density')
-    plt.title(title or f'1D Multimodal Dataset ({dataset.num_modes} modes)')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    return fig
-
+        Args:
+            samples: Array of shape (N, 2) with start and end values
+            num_stds: Number of standard deviations to consider as "in-distribution"
+            
+        Returns:
+            float: Fraction of samples that are within the expected distributions
+        """
+        if samples.shape[1] != 2:
+            raise ValueError("Samples must have shape (N, 2)")
+        
+        valid_count = 0
+        total_count = len(samples)
+        
+        for start_val, end_val in samples:
+            # Check if sample is valid for any allowed transition
+            is_sample_valid = False
+            
+            for mode_x1, mode_x2 in zip(*np.where(self.transition_matrix)):
+                start_valid = abs(start_val - self.start_means[mode_x1]) <= num_stds * self.start_stds[mode_x1]
+                end_valid = abs(end_val - self.end_means[mode_x2]) <= num_stds * self.end_stds[mode_x2]
+                
+                if start_valid and end_valid:
+                    is_sample_valid = True
+                    break
+            
+            if is_sample_valid:
+                valid_count += 1
+        
+        return valid_count / total_count
 
 if __name__ == "__main__":
-
+    # Example usage
     transition_matrix = np.array([
-        [1, 0],  # Mode 0 of x1 can pair with mode 0,1 of x2
-        [0, 1],
+        [1, 0],  # Mode 0 of start can only go to mode 0 of end
+        [0, 1],  # Mode 1 of start can only go to mode 1 of end
     ], dtype=bool)
     
-    dataset_custom = MultiModalDataset(
-        num_samples=5000,
+    dataset = MultiModalDataset(
+        num_samples=1000,
         start_means=[0, 2],
         start_stds=[0.2, 0.2],
         end_means=[0, 1],
@@ -281,10 +231,15 @@ if __name__ == "__main__":
         transition_matrix=transition_matrix
     )
     
-    data_figure = dataset_custom.plot_data()
-    data_figure.suptitle("Custom Transition Matrix Dataset")
-    data_figure.savefig("figures_notebook/custom_transition_matrix_dataset.png", dpi=300, bbox_inches="tight")
-
-    marginals_figure = dataset_custom.plot_marginals()
-    marginals_figure.suptitle("Custom Transitions - Marginal Distributions")
-    marginals_figure.savefig("figures_notebook/custom_transition_matrix_marginals.png", dpi=300, bbox_inches="tight")
+    # Plot transitions
+    fig = dataset.plot_transitions(title="Dataset Transitions")
+    fig.savefig("figures_notebook/custom_transition_matrix_dataset.png", dpi=300, bbox_inches="tight")
+    
+    # Test accuracy computation
+    accuracy = dataset.compute_accuracy(dataset.data)
+    print(f"Dataset self-accuracy: {accuracy:.3f}")
+    
+    # Test with some random samples
+    random_samples = np.random.randn(100, 2)
+    random_accuracy = dataset.compute_accuracy(random_samples)
+    print(f"Random samples accuracy: {random_accuracy:.3f}")
