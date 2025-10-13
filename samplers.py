@@ -396,7 +396,7 @@ class CDGS(nn.Module):
                     # PRUNING STEP (if enabled and in pruning window)
                     # ============================================================
                     # Apply pruning on second-to-last resampling iteration
-                    if self.enable_pruning and u == self.num_resampling_steps - 2:
+                    if self.enable_pruning and u == self.num_resampling_steps - 2 and self.num_resampling_steps > 1:
                         # Check if we're in the pruning window
                         if self.pruning_start * num_timesteps < i < self.pruning_end * num_timesteps:
                             latent = self.inversion_pruning(pred_x0, latent)
