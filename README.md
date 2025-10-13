@@ -2,31 +2,42 @@
 
 This repository contains code and a Jupyter notebook used to explore CDGS-style compositional samplers for multimodal 2D synthetic datasets. The materials demonstrate experiments on compositional samplers with resampling/pruning heuristics.
 
-Contents
-- `getting_started_with_CDGS.ipynb` — Main notebook that builds models, defines CDGS samplers, runs experiments, and produces visualizations.
-- `dataset.py` — Utilities to create synthetic 2D multimodal datasets and plotting helpers.
-- `plotter.py` — Standalone plotting utilities and helpers to visualize latents and Gaussian overlays.
-- `pretrained_checkpoints/` — Pretrained model weights (not tracked by git in default `.gitignore`).
+## Quick Setup
 
-Quick setup: Create and activate a Python environment (recommended Python 3.10+).
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Make sure you have uv installed, then:
 
 ```bash
-python -m venv .venv
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create and activate virtual environment with dependencies
+uv sync
+
+# Activate the environment
 source .venv/bin/activate
-pip install --upgrade pip
 ```
+## Contents
 
-and just follow the notebook.
+- `getting_started_with_CDGS.ipynb` — Main notebook that builds models, defines CDGS samplers, runs experiments, and produces visualizations.
+- `data.py` — Utilities to create synthetic 2D multimodal datasets and plotting helpers.
+- `models.py` — Model definitions for diffusion and flow matching models.
+- `samplers.py` — CDGS sampling implementations and related utilities.
+- `utils.py` — General utility functions and helpers.
 
-- The notebook contains an install cell that uses `%pip` so run that first to ensure kernel dependencies are available in the active environment.
+## Running the Notebook
 
-- The notebook will save results as csv files which can be converted into 
-images using `plotter.py`. Example:
+After setting up the environment, start Jupyter and open the main notebook:
 
 ```bash
-python plotter.py --csv /path/to/results.csv
+jupyter notebook getting_started_with_CDGS.ipynb
 ```
 
-Checkpoints and reproducibility
-- Pretrained model checkpoints are provided under `pretrained_checkpoints/`
-- The notebook includes a `seed_everything` helper and device selection that will attempt CUDA/MPS and fall back to CPU.
+The notebook contains cells that will guide you through:
+1. Dataset creation and visualization
+2. Model training (or loading pretrained models)
+3. CDGS sampling experiments
+4. Results analysis and visualization
+
+## Checkpoints and Reproducibility
+
+Pretrained model checkpoints are provided under `pretrained_checkpoints/`
