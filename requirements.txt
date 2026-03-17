@@ -2,6 +2,7 @@
 #    uv pip compile pyproject.toml -o requirements.txt
 appnope==0.1.4
     # via ipykernel
+beartype==0.22.9
 asttokens==3.0.0
     # via stack-data
 certifi==2025.10.5

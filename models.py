@@ -296,66 +296,69 @@ class FlowMatchingModel(nn.Module):
     def training_step(self, batch: torch.Tensor) -> torch.Tensor:
         """
         Training step for Conditional Flow Matching.
-        
+
+        Uses the convention:
+            x_sigma = (1 - sigma) * x_data + sigma * x_noise
+            v = x_noise - x_data   (velocity points toward noise)
+
+        The model takes sigma (noise level in [0, 1]) as the time input.
+        At sigma=0: clean data.  At sigma=1: pure noise.
+
         Args:
-            batch: Clean data x_1 of shape (batch_size, input_dim)
-            
+            batch: Clean data of shape (batch_size, input_dim)
+
         Returns:
             Loss tensor
         """
-        # 1. Sample from prior (x_0) and data (x_1)
-        x_1 = batch
-        x_0 = torch.randn_like(x_1) # Sample from N(0, I)
-        
-        # 2. Sample random time t ~ U[0, 1]
-        t = torch.rand(x_1.shape[0], device=x_1.device).unsqueeze(-1)
-        
-        # 3. Form the interpolated point x_t
-        x_t = t * x_1 + (1 - t) * x_0
-        
-        # 4. Define the target vector field u_t
-        u_t = x_1 - x_0
-        
-        # 5. Predict the vector field v_t using the model
-        v_pred = self(x_t, t.squeeze(-1))
-        
-        # 6. Compute loss (MSE between predicted and target vector field)
-        loss = F.mse_loss(v_pred, u_t)
-        
+        x_data = batch
+        x_noise = torch.randn_like(x_data)
+
+        # sigma ~ U[0, 1] represents noise level
+        sigma = torch.rand(x_data.shape[0], device=x_data.device).unsqueeze(-1)
+
+        # Interpolate: x_sigma = (1 - sigma) * data + sigma * noise
+        x_sigma = (1 - sigma) * x_data + sigma * x_noise
+
+        # Target velocity: v = noise - data (points toward noise, matching SD3/FLUX)
+        u_target = x_noise - x_data
+
+        # Predict the velocity v(x_sigma, sigma)
+        v_pred = self(x_sigma, sigma.squeeze(-1))
+
+        loss = F.mse_loss(v_pred, u_target)
         return loss
     
     @torch.no_grad()
     def sample(
-        self, 
-        batch_size: int, 
+        self,
+        batch_size: int,
         device: torch.device,
         num_inference_steps: int = 100
     ) -> torch.Tensor:
         """
-        Generate samples using ODE integration (Euler method).
-        
+        Generate samples using Euler ODE integration.
+
+        Uses sigma schedule [1.0 -> 0.0] (noise -> data).  
+        v = noise - data, so:
+            x_{sigma+d_sigma} = x_sigma + v * d_sigma
+        with d_sigma < 0 gives movement toward data.
+
         Args:
             batch_size: Number of samples to generate
             device: Device to run on
             num_inference_steps: Number of integration steps
-            
+
         Returns:
             Generated samples of shape (batch_size, input_dim)
         """
-        # Start with random noise from the prior distribution at t=0
         sample = torch.randn((batch_size, self.input_dim), device=device)
-        
-        # Define the time steps for integration
-        timesteps = torch.linspace(0, 1, num_inference_steps, device=device)
-        dt = timesteps[1] - timesteps[0]
-        
-        # ODE integration loop
-        for t in timesteps[:-1]:
-            # Predict the velocity vector v(x_t, t)
-            velocity = self(sample, t.expand(batch_size))
-            
-            # Update the sample using one step of the Euler method
-            # x_{t+dt} = x_t + v(x_t, t) * dt
+
+        sigmas = torch.linspace(1.0, 0.0, num_inference_steps + 1, device=device)
+
+        for i in range(len(sigmas) - 1):
+            sigma = sigmas[i]
+            dt = sigmas[i + 1] - sigma  # negative (denoising)
+            velocity = self(sample, sigma.expand(batch_size))
             sample = sample + velocity * dt
-        
+
         return sample
